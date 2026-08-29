@@ -12,11 +12,11 @@ export default async function handler(req, res) {
     var r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: body.model || 'claude-sonnet-4-6', max_tokens: body.max_tokens || 1500, messages: body.messages })
+      body: JSON.stringify({ model: body.model || 'claude-sonnet-4-6', max_tokens: body.max_tokens || 1500, temperature: body.temperature != null ? body.temperature : 0, messages: body.messages }),
     });
     var data = await r.json();
     res.status(r.status).json(data);
-  } catch(e) {
+  } catch (e) {
     res.status(500).json({ error: { message: 'Relay error: ' + e.message } });
   }
 }
