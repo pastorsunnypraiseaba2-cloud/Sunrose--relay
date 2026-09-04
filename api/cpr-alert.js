@@ -72,6 +72,23 @@ function calcCPR(H, L, C) {
   return { P: P, BC: BC, TC: TC };
 }
 
+// ---- Monthly aggregation -- same grouping approach as weekly, but by calendar month ----
+function buildMonthlyFromDaily(dailyCandles) {
+  var months = {};
+  dailyCandles.forEach(function (day) {
+    var d = new Date(day.epoch * 1000);
+    var key = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
+    if (!months[key]) months[key] = { high: day.high, low: day.low, close: day.close, firstEpoch: day.epoch, lastEpoch: day.epoch };
+    var m = months[key];
+    if (day.high > m.high) m.high = day.high;
+    if (day.low < m.low) m.low = day.low;
+    if (day.epoch > m.lastEpoch) { m.close = day.close; m.lastEpoch = day.epoch; }
+    if (day.epoch < m.firstEpoch) { m.firstEpoch = day.epoch; }
+  });
+  var keys = Object.keys(months).sort().reverse();
+  return keys.map(function (k) { return { key: k, high: months[k].high, low: months[k].low, close: months[k].close }; });
+}
+
 // ---- Weekly aggregation -- identical grouping logic to buildWeeklyFromDaily() in index.html ----
 function buildWeeklyFromDaily(dailyCandles) {
   var weeks = {};
@@ -154,9 +171,16 @@ async function checkInstrument(label, symbol) {
   var weeks = buildWeeklyFromDaily(dailyForWeek);
   var weeklyCPR = weeks.length >= 2 ? calcCPR(weeks[1].high, weeks[1].low, weeks[1].close) : null;
 
+  // Monthly CPR (from previous completed month, built from daily candles).
+  // 65 daily candles comfortably covers 2+ full calendar months even with weekends/holidays.
+  var dailyForMonth = await fetchCandles(symbol, 86400, 65);
+  var months = buildMonthlyFromDaily(dailyForMonth);
+  var monthlyCPR = months.length >= 2 ? calcCPR(months[1].high, months[1].low, months[1].close) : null;
+
   var timeframes = [
     { label: '15M', granularity: 900 },
     { label: '1H', granularity: 3600 },
+    { label: '4H', granularity: 14400 },
   ];
 
   for (var i = 0; i < timeframes.length; i++) {
@@ -174,10 +198,14 @@ async function checkInstrument(label, symbol) {
 
     var direction = last.close > last.open ? 'Bullish' : 'Bearish';
 
-    var checks = [
-      { name: 'Daily', cpr: dailyCPR },
-      { name: 'Weekly', cpr: weeklyCPR },
-    ];
+    // 15M candle closes are checked against Daily CPR only.
+    // 1H candle closes are checked against Weekly CPR only.
+    // 4H candle closes are checked against Monthly CPR only.
+    var checks = tf.label === '15M'
+      ? [{ name: 'Daily', cpr: dailyCPR }]
+      : tf.label === '1H'
+      ? [{ name: 'Weekly', cpr: weeklyCPR }]
+      : [{ name: 'Monthly', cpr: monthlyCPR }];
 
     for (var j = 0; j < checks.length; j++) {
       var c = checks[j];
@@ -227,4 +255,3 @@ module.exports = async function handler(req, res) {
 
   res.status(200).json({ checked: Object.keys(SYMBOLS), sent: sent.length, alerts: sent, errors: errors });
 };
-  
