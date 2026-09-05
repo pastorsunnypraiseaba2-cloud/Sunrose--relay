@@ -1,7 +1,7 @@
 // api/cpr-alert.js
 // Standalone CPR breakout alert -- runs independently of Chart Vision / analyze.js.
 // Triggered externally (e.g. by cron-job.org) every 15 minutes.
-// Checks XAUUSD, EURUSD, GBPUSD, USDJPY for:
+// Checks every instrument listed in SYMBOLS below for:
 //   15M close vs Daily CPR, 1H close vs Weekly CPR, 4H close vs Monthly CPR
 // -- and sends a Telegram alert whenever a strong-momentum candle closes
 // beyond its paired CPR level.
@@ -12,9 +12,19 @@ var DERIV_PUBLIC_APP_ID = '1089'; // same public app_id used by index.html -- no
 
 var SYMBOLS = {
   'Gold (XAUUSD)': 'frxXAUUSD',
+  'Silver (XAGUSD)': 'frxXAGUSD',
   'EUR/USD': 'frxEURUSD',
   'GBP/USD': 'frxGBPUSD',
   'USD/JPY': 'frxUSDJPY',
+  'USD/CHF': 'frxUSDCHF',
+  'AUD/USD': 'frxAUDUSD',
+  'USD/CAD': 'frxUSDCAD',
+  'NZD/USD': 'frxNZDUSD',
+  'GBP/JPY': 'frxGBPJPY',
+  'EUR/JPY': 'frxEURJPY',
+  'Bitcoin (BTCUSD)': 'cryBTCUSD',
+  'Ethereum (ETHUSD)': 'cryETHUSD',
+  'Solana (SOLUSD)': 'crySOLUSD',
 };
 
 // ---- Deriv candle fetch (mirrors index.html's derivWSRequest / derivFetchCandles) ----
