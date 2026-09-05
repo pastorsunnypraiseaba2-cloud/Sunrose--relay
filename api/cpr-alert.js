@@ -1,8 +1,10 @@
 // api/cpr-alert.js
 // Standalone CPR breakout alert -- runs independently of Chart Vision / analyze.js.
 // Triggered externally (e.g. by cron-job.org) every 15 minutes.
-// Checks XAUUSD, EURUSD, GBPUSD, USDJPY for a 15M or 1H candle that CLOSED beyond
-// Daily or Weekly CPR with strong momentum, and sends a Telegram alert if so.
+// Checks XAUUSD, EURUSD, GBPUSD, USDJPY for:
+//   15M close vs Daily CPR, 1H close vs Weekly CPR, 4H close vs Monthly CPR
+// -- and sends a Telegram alert whenever a strong-momentum candle closes
+// beyond its paired CPR level.
 
 const WebSocket = require('ws');
 
@@ -160,32 +162,45 @@ async function markAlerted(key) {
 // ---- Per-instrument check ----
 async function checkInstrument(label, symbol) {
   var alerts = [];
-
-  // Daily CPR (from previous completed day)
-  var dailyCandles = await fetchCandles(symbol, 86400, 4);
-  var prevDay = dailyCandles[dailyCandles.length - 2];
-  var dailyCPR = calcCPR(prevDay.high, prevDay.low, prevDay.close);
-
-  // Weekly CPR (from previous completed week, built from daily candles)
-  var dailyForWeek = await fetchCandles(symbol, 86400, 16);
-  var weeks = buildWeeklyFromDaily(dailyForWeek);
-  var weeklyCPR = weeks.length >= 2 ? calcCPR(weeks[1].high, weeks[1].low, weeks[1].close) : null;
-
-  // Monthly CPR (from previous completed month, built from daily candles).
-  // 65 daily candles comfortably covers 2+ full calendar months even with weekends/holidays.
-  var dailyForMonth = await fetchCandles(symbol, 86400, 65);
-  var months = buildMonthlyFromDaily(dailyForMonth);
-  var monthlyCPR = months.length >= 2 ? calcCPR(months[1].high, months[1].low, months[1].close) : null;
-
   var timeframes = [
     { label: '15M', granularity: 900 },
     { label: '1H', granularity: 3600 },
     { label: '4H', granularity: 14400 },
   ];
 
+  // Fetch everything this instrument needs AT ONCE instead of one-by-one --
+  // six independent Deriv requests running in parallel instead of in sequence.
+  // This is what keeps total run time low enough to stay under Vercel's 10s
+  // Hobby-plan function limit as more instruments are added.
+  var results = await Promise.all([
+    fetchCandles(symbol, 86400, 4),   // for Daily CPR
+    fetchCandles(symbol, 86400, 16),  // for Weekly CPR
+    fetchCandles(symbol, 86400, 65),  // for Monthly CPR
+    fetchCandles(symbol, timeframes[0].granularity, 25), // 15M
+    fetchCandles(symbol, timeframes[1].granularity, 25), // 1H
+    fetchCandles(symbol, timeframes[2].granularity, 25), // 4H
+  ]);
+  var dailyCandles = results[0];
+  var dailyForWeek = results[1];
+  var dailyForMonth = results[2];
+  var candlesByTf = { '15M': results[3], '1H': results[4], '4H': results[5] };
+
+  // Daily CPR (from previous completed day)
+  var prevDay = dailyCandles[dailyCandles.length - 2];
+  var dailyCPR = calcCPR(prevDay.high, prevDay.low, prevDay.close);
+
+  // Weekly CPR (from previous completed week, built from daily candles)
+  var weeks = buildWeeklyFromDaily(dailyForWeek);
+  var weeklyCPR = weeks.length >= 2 ? calcCPR(weeks[1].high, weeks[1].low, weeks[1].close) : null;
+
+  // Monthly CPR (from previous completed month, built from daily candles).
+  // 65 daily candles comfortably covers 2+ full calendar months even with weekends/holidays.
+  var months = buildMonthlyFromDaily(dailyForMonth);
+  var monthlyCPR = months.length >= 2 ? calcCPR(months[1].high, months[1].low, months[1].close) : null;
+
   for (var i = 0; i < timeframes.length; i++) {
     var tf = timeframes[i];
-    var candles = await fetchCandles(symbol, tf.granularity, 25);
+    var candles = candlesByTf[tf.label];
     var nowSec = Math.floor(Date.now() / 1000);
     // last candle whose close time has actually passed = most recently CLOSED candle
     var closedCandles = candles.filter(function (c) { return c.epoch + tf.granularity <= nowSec; });
@@ -240,16 +255,25 @@ module.exports = async function handler(req, res) {
   var sent = [];
   var errors = [];
 
-  for (var label in SYMBOLS) {
-    try {
-      var alerts = await checkInstrument(label, SYMBOLS[label]);
-      for (var i = 0; i < alerts.length; i++) {
-        var a = alerts[i];
-        var ok = await sendTelegram(a.text);
-        if (ok) { await markAlerted(a.dedupKey); sent.push(a.text); }
-      }
-    } catch (e) {
-      errors.push(label + ': ' + e.message);
+  // Check every instrument at the same time, not one after another --
+  // this is the other half of keeping total run time low.
+  var labels = Object.keys(SYMBOLS);
+  var checkResults = await Promise.allSettled(labels.map(function (label) {
+    return checkInstrument(label, SYMBOLS[label]);
+  }));
+
+  for (var idx = 0; idx < labels.length; idx++) {
+    var label = labels[idx];
+    var result = checkResults[idx];
+    if (result.status === 'rejected') {
+      errors.push(label + ': ' + result.reason.message);
+      continue;
+    }
+    var alerts = result.value;
+    for (var i = 0; i < alerts.length; i++) {
+      var a = alerts[i];
+      var ok = await sendTelegram(a.text);
+      if (ok) { await markAlerted(a.dedupKey); sent.push(a.text); }
     }
   }
 
