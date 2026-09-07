@@ -84,6 +84,54 @@ function calcCPR(H, L, C) {
   return { P: P, BC: BC, TC: TC };
 }
 
+// ---- Structure detection (BOS / CHoCH) -- deterministic, from the same closed
+// candles already fetched for the momentum check. No extra API calls needed.
+// A swing high/low is confirmed by a simple 2-bar fractal (2 candles on each side).
+function findSwings(candles) {
+  var swings = [];
+  for (var i = 2; i < candles.length - 2; i++) {
+    var c = candles[i];
+    var isHigh = c.high > candles[i - 1].high && c.high > candles[i - 2].high &&
+      c.high > candles[i + 1].high && c.high > candles[i + 2].high;
+    var isLow = c.low < candles[i - 1].low && c.low < candles[i - 2].low &&
+      c.low < candles[i + 1].low && c.low < candles[i + 2].low;
+    if (isHigh) swings.push({ type: 'high', price: c.high });
+    if (isLow) swings.push({ type: 'low', price: c.low });
+  }
+  return swings;
+}
+
+// Returns a short label describing whether the breakout candle also broke
+// market structure, and whether that's a BOS (continuation) or CHoCH (reversal)
+// relative to the prior swing sequence -- or null if structure can't be read yet.
+function checkStructureBreak(last, precedingCandles) {
+  var swings = findSwings(precedingCandles);
+  var highs = swings.filter(function (s) { return s.type === 'high'; });
+  var lows = swings.filter(function (s) { return s.type === 'low'; });
+  if (!highs.length && !lows.length) return null;
+
+  var lastHigh = highs.length ? highs[highs.length - 1] : null;
+  var prevHigh = highs.length > 1 ? highs[highs.length - 2] : null;
+  var lastLow = lows.length ? lows[lows.length - 1] : null;
+  var prevLow = lows.length > 1 ? lows[lows.length - 2] : null;
+
+  var priorTrend = 'Neutral'; // used only to decide BOS (continuation) vs CHoCH (reversal) wording
+  if (lastHigh && prevHigh && lastLow && prevLow) {
+    var risingHighs = lastHigh.price > prevHigh.price;
+    var risingLows = lastLow.price > prevLow.price;
+    if (risingHighs && risingLows) priorTrend = 'Bullish';
+    else if (!risingHighs && !risingLows) priorTrend = 'Bearish';
+  }
+
+  if (lastHigh && last.close > lastHigh.price) {
+    return (priorTrend === 'Bullish' ? 'BOS' : 'CHoCH') + ' -- broke prior swing high ' + lastHigh.price.toFixed(2);
+  }
+  if (lastLow && last.close < lastLow.price) {
+    return (priorTrend === 'Bearish' ? 'BOS' : 'CHoCH') + ' -- broke prior swing low ' + lastLow.price.toFixed(2);
+  }
+  return 'No structure break -- CPR broke without a swing high/low break';
+}
+
 // ---- Monthly aggregation -- same grouping approach as weekly, but by calendar month ----
 function buildMonthlyFromDaily(dailyCandles) {
   var months = {};
@@ -243,10 +291,18 @@ async function checkInstrument(label, symbol) {
       var dedupKey = 'cprbreak:' + symbol + ':' + tf.label + ':' + c.name + ':' + last.epoch;
       if (await alreadyAlerted(dedupKey)) continue;
 
+      var structureNote = checkStructureBreak(last, preceding);
+
+      var openLocation = last.open > c.cpr.TC ? 'Opened ABOVE CPR (already extended before this candle)'
+        : last.open < c.cpr.BC ? 'Opened BELOW CPR (already extended before this candle)'
+        : 'Opened INSIDE CPR (broke through during this candle)';
+
       alerts.push({
         text: '\uD83D\uDEA8 ' + label + ' -- ' + direction + ' break of ' + c.name + ' CPR on ' + tf.label + ' close\n' +
-          'Close: ' + last.close + ' | ' + c.name + ' ' + (brokeUp ? 'TC' : 'BC') + ': ' + (brokeUp ? c.cpr.TC : c.cpr.BC).toFixed(2) + '\n' +
-          'Strong momentum candle confirmed.',
+          'Open: ' + last.open + ' | Close: ' + last.close + ' | ' + c.name + ' ' + (brokeUp ? 'TC' : 'BC') + ': ' + (brokeUp ? c.cpr.TC : c.cpr.BC).toFixed(2) + '\n' +
+          openLocation + '\n' +
+          'Strong momentum candle confirmed.' +
+          (structureNote ? '\nStructure: ' + structureNote : ''),
         dedupKey: dedupKey,
       });
     }
