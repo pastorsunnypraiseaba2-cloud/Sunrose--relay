@@ -2,7 +2,6 @@
 const SB_URL = 'https://bjjrwtwiljfhenyyxwqr.supabase.co';
 const SB_KEY = 'sb_publishable_O1V_pifLmzEVj1xvvVu6eg_RILwwgAv';
 const ALLOWED_ORIGIN = 'https://pastorsunnypraiseaba2-cloud.github.io';
-const BUDGET_USD = 5;         // monthly AI allowance per member, in US dollars (change here)
 const PRICE_IN = 3 / 1e6;     // Claude Sonnet price per input token (USD)
 const PRICE_OUT = 15 / 1e6;   // Claude Sonnet price per output token (USD)
 const MAX_TOKENS_CAP = 6000;  // largest answer a member can request
@@ -22,6 +21,9 @@ export default async function handler(req, res) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) { fail(res, 500, 'Missing ANTHROPIC_API_KEY on server'); return; }
+  const svcKey = process.env.SUPABASE_SERVICE_KEY;
+  if (!svcKey) { fail(res, 500, 'Missing SUPABASE_SERVICE_KEY on server'); return; }
+  const svcHeaders = { apikey: svcKey, 'Content-Type': 'application/json' };
 
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -36,31 +38,34 @@ export default async function handler(req, res) {
     const user = await ur.json();
     if (!user || !user.id) { fail(res, 401, 'Please log in again.'); return; }
 
-    // 2. Does this member still have access?
-    const pr = await fetch(
-      SB_URL + '/rest/v1/profiles?id=eq.' + user.id + '&select=trial_end,subscription_status',
-      { headers: { apikey: SB_KEY, Authorization: 'Bearer ' + token } }
-    );
-    const rows = pr.ok ? await pr.json() : [];
-    const p = rows && rows[0];
-    const active = p && (p.subscription_status === 'active' ||
-      (p.trial_end && new Date(p.trial_end) > new Date()));
-    if (!active) { fail(res, 403, 'Your access period has ended.'); return; }
-
-    // 3. Monthly budget (per member)
-    const br = await fetch(SB_URL + '/rest/v1/rpc/ai_budget_ok', {
+    // 2. Which group is this member in, and are they within their AI limit?
+    const sr = await fetch(SB_URL + '/rest/v1/rpc/ai_status', {
       method: 'POST',
-      headers: { apikey: SB_KEY, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ p_limit: BUDGET_USD })
+      headers: svcHeaders,
+      body: JSON.stringify({ uid: user.id })
     });
-    if (!br.ok) { fail(res, 500, 'Usage check failed. Please try again.'); return; }
-    const withinBudget = await br.json();
-    if (withinBudget !== true) {
-      fail(res, 429, 'Your $' + BUDGET_USD + ' AI allowance for this month is used up. It renews on the 1st of next month.');
+    if (!sr.ok) { fail(res, 500, 'Usage check failed. Please try again.'); return; }
+    const srows = await sr.json();
+    const st = srows && srows[0];
+    if (!st || st.tier === 'none') {
+      fail(res, 403, 'Your access period has ended. Please subscribe to continue.');
+      return;
+    }
+    if (st.allowed !== true) {
+      const lim = Number(st.limit_usd);
+      let msg;
+      if (st.tier === 'early') {
+        msg = 'Your $' + lim + ' early access AI allowance for this month is used up. It renews on the 1st of next month.';
+      } else if (st.tier === 'trial') {
+        msg = 'Your trial AI allowance ($' + lim + ') is used up. Subscribe to keep using the AI.';
+      } else {
+        msg = 'You have reached the fair-use AI limit for this month. It renews on the 1st of next month.';
+      }
+      fail(res, 429, msg);
       return;
     }
 
-    // 4. Ask Claude
+    // 3. Ask Claude
     let body = req.body;
     if (typeof body === 'string') body = JSON.parse(body);
     if (!body || !Array.isArray(body.messages)) { fail(res, 400, 'Bad request'); return; }
@@ -77,14 +82,14 @@ export default async function handler(req, res) {
     });
     const data = await r.json();
 
-    // 5. Record what this request cost
+    // 4. Record what this request cost
     if (r.ok && data && data.usage) {
       const cost = (data.usage.input_tokens || 0) * PRICE_IN + (data.usage.output_tokens || 0) * PRICE_OUT;
       try {
-        await fetch(SB_URL + '/rest/v1/rpc/ai_add_spend', {
+        await fetch(SB_URL + '/rest/v1/ai_usage', {
           method: 'POST',
-          headers: { apikey: SB_KEY, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ p_usd: Number(cost.toFixed(4)) })
+          headers: Object.assign({}, svcHeaders, { Prefer: 'return=minimal' }),
+          body: JSON.stringify({ user_id: user.id, cost_usd: Number(cost.toFixed(4)) })
         });
       } catch (e) { /* recording is best effort */ }
     }
