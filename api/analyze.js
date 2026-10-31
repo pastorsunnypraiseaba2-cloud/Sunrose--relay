@@ -4,8 +4,20 @@ const SB_KEY = 'sb_publishable_O1V_pifLmzEVj1xvvVu6eg_RILwwgAv';
 const ALLOWED_ORIGIN = 'https://pastorsunnypraiseaba2-cloud.github.io';
 const PRICE_IN = 3 / 1e6;     // Claude Sonnet price per input token (USD)
 const PRICE_OUT = 15 / 1e6;   // Claude Sonnet price per output token (USD)
-const MAX_TOKENS_CAP = 6000;  // largest answer a member can request
+const MAX_TOKENS_CAP = 8000;  // largest answer a member can request
+const BIG_ANSWER_TOKENS = 8000; // used when the app asks for 6000 or more
 const MODEL = 'claude-sonnet-4-6';
+const EXTRA_RULES =
+  'Extra output rules for any trade setup you return. ' +
+  '1) STOP RULE (mandatory, overrides any other way of choosing the stop). ' +
+  'For a SELL, the invalidation level is the HIGHEST of (a) the high of the bearish order block or supply zone you use for the entry, and (b) the high of the against-trend liquidity sweep that came before the change of character. ' +
+  'For a BUY, it is the LOWEST of (a) the low of the bullish order block or demand zone you use for the entry, and (b) the low of the against-trend liquidity sweep. ' +
+  'A previous day, week or month high or low may be used only when it is that sweep level or that order block edge. Do not anchor to the running high or low of the current day unless it is one of those two. ' +
+  'The stop loss is the invalidation level plus a small buffer away from the entry. In the stop loss reason, say which anchor you used. ' +
+  '2) Targets must lie ahead of the current price and be listed nearest first. ' +
+  'For a SELL, list targets from the highest price to the lowest. For a BUY, list targets from the lowest price to the highest. ' +
+  'Never list a target level that the current price has already reached or passed. ' +
+  '3) Use accurate wording: a sell is made into lows ("selling into the low"), never described as "buying".';
 
 function fail(res, status, message) {
   res.status(status).json({ error: { message: message } });
@@ -38,50 +50,45 @@ export default async function handler(req, res) {
     const user = await ur.json();
     if (!user || !user.id) { fail(res, 401, 'Please log in again.'); return; }
 
-    // Owner accounts (set in the OWNER_EMAILS setting on Vercel) skip the AI allowance.
-    // The email must also be confirmed, so nobody can pose as the owner.
-    const ownerList = (process.env.OWNER_EMAILS || '').toLowerCase().split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-    const isOwner = !!(user.email && (user.email_confirmed_at || user.confirmed_at) && ownerList.indexOf(String(user.email).toLowerCase()) !== -1);
-
     // 2. Which group is this member in, and are they within their AI limit?
-    if (!isOwner) {
-      const sr = await fetch(SB_URL + '/rest/v1/rpc/ai_status', {
-        method: 'POST',
-        headers: svcHeaders,
-        body: JSON.stringify({ uid: user.id })
-      });
-      if (!sr.ok) { fail(res, 500, 'Usage check failed. Please try again.'); return; }
-      const srows = await sr.json();
-      const st = srows && srows[0];
-      if (!st || st.tier === 'none') {
-        fail(res, 403, 'Your access period has ended. Please subscribe to continue.');
-        return;
+    const sr = await fetch(SB_URL + '/rest/v1/rpc/ai_status', {
+      method: 'POST',
+      headers: svcHeaders,
+      body: JSON.stringify({ uid: user.id })
+    });
+    if (!sr.ok) { fail(res, 500, 'Usage check failed. Please try again.'); return; }
+    const srows = await sr.json();
+    const st = srows && srows[0];
+    if (!st || st.tier === 'none') {
+      fail(res, 403, 'Your access period has ended. Please subscribe to continue.');
+      return;
+    }
+    if (st.allowed !== true) {
+      const lim = Number(st.limit_usd);
+      let msg;
+      if (st.tier === 'early') {
+        msg = 'Your $' + lim + ' early access AI allowance for this month is used up. It renews on the 1st of next month.';
+      } else if (st.tier === 'trial') {
+        msg = 'Your trial AI allowance ($' + lim + ') is used up. Subscribe to keep using the AI.';
+      } else {
+        msg = 'You have reached the fair-use AI limit for this month. It renews on the 1st of next month.';
       }
-      if (st.allowed !== true) {
-        const lim = Number(st.limit_usd);
-        let msg;
-        if (st.tier === 'early') {
-          msg = 'Your $' + lim + ' early access AI allowance for this month is used up. It renews on the 1st of next month.';
-        } else if (st.tier === 'trial') {
-          msg = 'Your trial AI allowance ($' + lim + ') is used up. Subscribe to keep using the AI.';
-        } else {
-          msg = 'You have reached the fair-use AI limit for this month. It renews on the 1st of next month.';
-        }
-        fail(res, 429, msg);
-        return;
-      }
+      fail(res, 429, msg);
+      return;
     }
 
     // 3. Ask Claude
     let body = req.body;
     if (typeof body === 'string') body = JSON.parse(body);
     if (!body || !Array.isArray(body.messages)) { fail(res, 400, 'Bad request'); return; }
-    const maxTokens = Math.min(Number(body.max_tokens) || 1500, MAX_TOKENS_CAP);
+    const requested = Number(body.max_tokens) || 1500;
+    const maxTokens = Math.min(requested >= 6000 ? BIG_ANSWER_TOKENS : requested, MAX_TOKENS_CAP);
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: MODEL,
+        system: EXTRA_RULES,
         max_tokens: maxTokens,
         temperature: body.temperature != null ? body.temperature : 0,
         messages: body.messages
