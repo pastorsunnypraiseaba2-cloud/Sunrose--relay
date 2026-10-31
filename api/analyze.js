@@ -8,16 +8,22 @@ const MAX_TOKENS_CAP = 8000;  // largest answer a member can request
 const BIG_ANSWER_TOKENS = 8000; // used when the app asks for 6000 or more
 const MODEL = 'claude-sonnet-4-6';
 const EXTRA_RULES =
-  'Extra output rules for any trade setup you return. ' +
-  '1) STOP RULE (mandatory, overrides any other way of choosing the stop). ' +
-  'For a SELL, the invalidation level is the HIGHEST of (a) the high of the bearish order block or supply zone you use for the entry, and (b) the high of the against-trend liquidity sweep that came before the change of character. ' +
-  'For a BUY, it is the LOWEST of (a) the low of the bullish order block or demand zone you use for the entry, and (b) the low of the against-trend liquidity sweep. ' +
-  'A previous day, week or month high or low may be used only when it is that sweep level or that order block edge. Do not anchor to the running high or low of the current day unless it is one of those two. ' +
+  'Extra output rules for any trade setup you return. These rules override any other way of choosing the items they cover. ' +
+  '1) ENTRY ZONE RULE. First identify the displacement (the fast move) that caused the confirmed break of structure. ' +
+  'The Fair Value Gap (FVG) is the exact three-candle imbalance that displacement left, using its exact boundaries. ' +
+  'The Order Block (OB) is the last opposite-colour candle before that displacement (for a SELL, the last up candle; for a BUY, the last down candle). ' +
+  'If the FVG and the OB overlap, the entry zone is the overlapping price range. If there is a valid FVG with no overlap, the entry zone is the FVG alone. ' +
+  'An Order Block with no FVG is NOT a qualified entry: say so, and give the verdict WAIT. If neither zone can be identified on the charts, give the verdict WAIT and set the entry zone to null. ' +
+  'Never widen, merge, estimate or invent zone boundaries. In your reasoning, state the FVG boundaries, the OB boundaries and any overlap range. ' +
+  '2) STOP RULE. For a SELL, the invalidation level is the HIGHEST of (a) the high of the order block or FVG zone used for the entry, and (b) the high of the against-trend liquidity sweep that came before the change of character. ' +
+  'For a BUY, it is the LOWEST of (a) the low of the order block or FVG zone used for the entry, and (b) the low of the against-trend liquidity sweep. ' +
+  'A previous day, week or month high or low may be used only when it is that sweep level or that zone edge. Do not anchor to the running high or low of the current day unless it is one of those two. ' +
   'The stop loss is the invalidation level plus a small buffer away from the entry. In the stop loss reason, say which anchor you used. ' +
-  '2) Targets must lie ahead of the current price and be listed nearest first. ' +
+  '3) TARGETS. Targets must lie ahead of the current price and be listed nearest first. ' +
   'For a SELL, list targets from the highest price to the lowest. For a BUY, list targets from the lowest price to the highest. ' +
   'Never list a target level that the current price has already reached or passed. ' +
-  '3) Use accurate wording: a sell is made into lows ("selling into the low"), never described as "buying".';
+  '4) WORDING. A sell is made into lows ("selling into the low"), never described as "buying". ' +
+  'Use plain double hyphens (--) and never long dashes in any text you write.';
 
 function fail(res, status, message) {
   res.status(status).json({ error: { message: message } });
