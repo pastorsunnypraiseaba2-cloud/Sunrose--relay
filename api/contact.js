@@ -83,7 +83,7 @@ export default async function handler(req, res) {
     company: oneLine(body.company, 160),
     country: oneLine(body.country, 80),
     service: SERVICES[body.service] ? body.service : "",
-    budget: type === "quote" && BUDGETS[body.budget] ? body.budget : "",
+    budget: type === "quote" ? (BUDGETS[body.budget] || oneLine(body.budget, 100)) : "",
     preferred_date: type === "consultation" && /^\d{4}-\d{2}-\d{2}$/.test(body.preferred_date || "") ? body.preferred_date : null,
     preferred_time: type === "consultation" && TIMES.includes(body.preferred_time) ? body.preferred_time : "",
     meeting_mode: type === "consultation" && MODES.includes(body.meeting_mode) ? body.meeting_mode : "",
@@ -122,7 +122,7 @@ export default async function handler(req, res) {
   if (key) {
     const rows = [
       ["Type", TYPES[type]], ["Name", e.name], ["Email", e.email], ["Phone / WhatsApp", e.phone], ["Company", e.company],
-      ["Country", e.country], ["Service", SERVICES[e.service]], ["Budget", BUDGETS[e.budget]],
+      ["Country", e.country], ["Service", SERVICES[e.service]], ["Budget / plan", e.budget],
       ["Preferred date", e.preferred_date], ["Preferred time", e.preferred_time], ["Meeting", e.meeting_mode],
       ["Subject", e.subject], ["Sent from page", e.page],
     ].filter(([, v]) => v);
