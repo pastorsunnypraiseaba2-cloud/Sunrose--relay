@@ -8,7 +8,7 @@
 import crypto from 'crypto';
 
 const SB_URL = 'https://bjjrwtwiljfhenyyxwqr.supabase.co';
-const GRACE_DAYS = 2; // extra days after a renewal date before access is removed
+const GRACE_DAYS = 2; // extra days on a member's first paid period, so a slightly late renewal never locks them out
 
 function readRaw(req) {
   return new Promise((resolve) => {
@@ -18,7 +18,6 @@ function readRaw(req) {
     req.on('error', () => resolve(''));
   });
 }
-const addDays = (d, n) => new Date(new Date(d).getTime() + n * 86400000).toISOString();
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -66,15 +65,34 @@ export default async function handler(req, res) {
       const vj = await vr.json().catch(() => ({}));
       const tx = vj && vj.data;
       if (!vr.ok || !tx || tx.status !== 'success') { console.warn('verify failed', d.reference); return res.status(200).end(); }
+
+      // Ignore a payment we have already counted (Paystack can send the same event twice)
+      const dup = await fetch(SB_URL + '/rest/v1/payments?select=id&reference=eq.' + encodeURIComponent(tx.reference), { headers: db });
+      if (dup.ok && (await dup.json()).length) return res.status(200).end();
+
       const uid = await findUser();
       if (!uid) { console.warn('no member for payment', d.reference); return res.status(200).end(); }
-      const planObj = tx.plan_object || tx.plan || d.plan || {};
+      const planObj = tx.plan_object || d.plan || {};
       const interval = planObj.interval || (d.metadata && d.metadata.plan === 'yearly' ? 'annually' : 'monthly');
       const isYear = /annual|year/i.test(interval);
       const planName = isYear ? 'yearly' : 'monthly';
-      const end = addDays(new Date(), (isYear ? 365 : 30) + GRACE_DAYS);
+
+      // Start from whichever is later: now, or the member's existing access (paid, early access or trial),
+      // so unused days are never lost. Add one calendar month or year on top.
+      const pr = await fetch(SB_URL + '/rest/v1/profiles?select=subscription_end,trial_end,early_access_until&id=eq.' + uid, { headers: db });
+      const prof = (pr.ok ? (await pr.json())[0] : null) || {};
+      const now = Date.now();
+      let base = now;
+      for (const k of ['subscription_end', 'trial_end', 'early_access_until']) {
+        const t = prof[k] ? new Date(prof[k]).getTime() : 0;
+        if (t > base) base = t;
+      }
+      const endDate = new Date(base);
+      if (isYear) endDate.setUTCFullYear(endDate.getUTCFullYear() + 1); else endDate.setUTCMonth(endDate.getUTCMonth() + 1);
+      if (base === now) endDate.setUTCDate(endDate.getUTCDate() + GRACE_DAYS); // grace only when starting fresh
+
       await updateProfile(uid, {
-        subscription_status: 'active', plan: planName, subscription_end: end,
+        subscription_status: 'active', plan: planName, subscription_end: endDate.toISOString(),
         paystack_customer_code: (tx.customer && tx.customer.customer_code) || null,
       });
       await fetch(SB_URL + '/rest/v1/payments', {
@@ -84,14 +102,13 @@ export default async function handler(req, res) {
       return res.status(200).end();
     }
 
-    // ---- 3. Subscription created: remember its codes and next billing date ----
+    // ---- 3. Subscription created: remember its codes (access dates are set by the payment above) ----
     if (type === 'subscription.create') {
       const uid = await findUser();
       if (uid) await updateProfile(uid, {
         paystack_subscription_code: d.subscription_code || null,
         paystack_email_token: d.email_token || null,
         paystack_customer_code: (d.customer && d.customer.customer_code) || null,
-        ...(d.next_payment_date ? { subscription_end: addDays(d.next_payment_date, GRACE_DAYS) } : {}),
       });
       return res.status(200).end();
     }
