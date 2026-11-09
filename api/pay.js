@@ -9,8 +9,8 @@
 
 const SB_URL = 'https://bjjrwtwiljfhenyyxwqr.supabase.co';
 const SB_KEY = 'sb_publishable_O1V_pifLmzEVj1xvvVu6eg_RILwwgAv';
-const APP_URL = 'https://pastorsunnypraiseaba2-cloud.github.io/sunrose-trader-os/';
-const ALLOWED_ORIGINS = ['https://pastorsunnypraiseaba2-cloud.github.io', 'https://localhost', 'capacitor://localhost', 'http://localhost'];
+const APP_URL = 'https://app.sunrosetechnologies.com/';
+const ALLOWED_ORIGINS = ['https://app.sunrosetechnologies.com', 'https://pastorsunnypraiseaba2-cloud.github.io', 'https://localhost', 'capacitor://localhost', 'http://localhost'];
 const PLANS = {
   monthly: { env: 'PAYSTACK_PLAN_MONTHLY', amount: 39500 },
   yearly:  { env: 'PAYSTACK_PLAN_YEARLY',  amount: 330000 },
