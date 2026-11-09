@@ -1,7 +1,7 @@
 // Sunrose relay: only logged-in members with valid access can use the AI.
 const SB_URL = 'https://bjjrwtwiljfhenyyxwqr.supabase.co';
 const SB_KEY = 'sb_publishable_O1V_pifLmzEVj1xvvVu6eg_RILwwgAv';
-const ALLOWED_ORIGIN = 'https://pastorsunnypraiseaba2-cloud.github.io';
+const ALLOWED_ORIGINS = ['https://app.sunrosetechnologies.com', 'https://pastorsunnypraiseaba2-cloud.github.io', 'https://localhost', 'capacitor://localhost', 'http://localhost'];
 const PRICE_IN = 3 / 1e6;     // Claude Sonnet price per input token (USD)
 const PRICE_OUT = 15 / 1e6;   // Claude Sonnet price per output token (USD)
 const MAX_TOKENS_CAP = 8000;  // largest answer a member can request
@@ -18,7 +18,8 @@ function fail(res, status, message) {
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+  const origin = req.headers.origin || '';
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
